@@ -1,0 +1,211 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from scipy.integrate import solve_ivp
+import os
+
+# ===============================
+# SCELTA DEL METODO E DEL TIPO DI CILINDRO
+# ===============================
+# method = 1 → metodo ODE (integrazione dx/dt=u, dy/dt=v)
+# method = 2 → metodo funzione di corrente ψ(x,y)
+method = 2  # cambia a 2 per metodo funzione di corrente
+
+# cylinder_type = "non_portante" → cilindro senza circolazione
+# cylinder_type = "portante" → cilindro con circolazione (lift)
+cylinder_type = "portante"  # cambia a "non_portante" se vuoi
+
+# ===============================
+# PARAMETRI DEL PROBLEMA
+# ===============================
+V_inf = 1.0   # velocità all'infinito
+R = 1.0       # raggio del cilindro
+# Gamma = 4*np.pi*R*V_inf  # circolazione (solo se cilindro portante)   caso limite, dove P1=P2 proprio a theta=90 gradi
+Gamma = -10.0  # circolazione (solo se cilindro portante), gamma = 10 allora P1,P2 si trovano nel 1-2 quadrante
+# Gamma = 5*np.pi*R*V_inf  # circolazione (solo se cilindro portante)   caso in cui gamma maggiore 4*np.pi*R*V_inf, non ci sono punti di ristagno
+
+
+rho = 1.0     # densità del fluido
+
+# ===============================
+# FUNZIONI VELOCITÀ E FUNZIONE DI CORRENTE
+# ===============================
+
+def psi_cylinder(x, y, V_inf, R, Gamma=0.0):
+    """
+    Funzione di corrente ψ(x,y) attorno a un cilindro.
+    - Formula base (senza circolazione):
+        ψ(x,y) = V_inf * (r - R^2/r) * sin(θ)
+    - Aggiunta della circolazione (se portante):
+        ψ(x,y) += - Γ/(2π) * ln(r)
+    """
+    r = np.sqrt(x**2 + y**2)
+    theta = np.arctan2(y, x)
+    
+    psi = V_inf * (r - R**2/r) * np.sin(theta)
+    
+    if Gamma != 0.0:
+        psi += -Gamma/(2*np.pi) * np.log(r)
+    return psi
+
+def velocity_field(x, y, V_inf, R, Gamma=0.0):
+    """
+    Calcola il campo di velocità (u,v) attorno al cilindro.
+    - In coordinate polari:
+        Vr     = V_inf * (1 - R^2/r^2) * cos(θ)
+        Vθ     = -V_inf * (1 + R^2/r^2) * sin(θ) + Γ/(2πr)  (se portante)
+    - Conversione in cartesiane:
+        u = Vr cosθ - Vθ sinθ
+        v = Vr sinθ + Vθ cosθ
+    """
+    r = np.sqrt(x**2 + y**2)
+    theta = np.arctan2(y, x)
+    
+    if Gamma == 0.0:
+        Vr = V_inf * (1 - R**2/r**2) * np.cos(theta)
+        Vtheta = -V_inf * (1 + R**2/r**2) * np.sin(theta)
+    else:
+        Vr = V_inf * (1 - R**2/r**2) * np.cos(theta)
+        Vtheta = -V_inf * (1 + R**2/r**2) * np.sin(theta) + Gamma/(2*np.pi*r)
+    
+    u = Vr * np.cos(theta) - Vtheta * np.sin(theta)
+    v = Vr * np.sin(theta) + Vtheta * np.cos(theta)
+    return u, v
+
+# ===============================
+# PUNTO INIZIALE (solo per marker rosso)
+# ===============================
+x0, y0 = -2, 2
+
+# ===============================
+# CALCOLO LINEE DI CORRENTE
+# ===============================
+plt.figure(figsize=(12,6))
+
+plt.subplot(1,2,1)  # primo subplot: linee di corrente
+
+if method == 1:
+    def odefun(t, Y):
+        """
+        Sistema di ODE per le linee di corrente:
+        dx/dt = u(x,y), dy/dt = v(x,y)
+        """
+        x, y = Y
+        u, v = velocity_field(x, y, V_inf, R, Gamma if cylinder_type=="portante" else 0.0)
+        return [u, v]
+    
+    # Genero più linee partendo da x = -3 e varie y
+    y_starts = np.linspace(-2, 5, 15)
+    x_start = -3.0
+    
+    for y0 in y_starts:
+        sol = solve_ivp(
+            odefun,
+            [0, 20],             # "tempo" fittizio per integrare
+            [x_start, y0],       # punto iniziale
+            max_step=0.05
+        )
+        mask = np.sqrt(sol.y[0]**2 + sol.y[1]**2) >= R
+        plt.plot(sol.y[0][mask], sol.y[1][mask], "b", linewidth=1)
+
+elif method == 2:
+    psi0 = psi_cylinder(x0, y0, V_inf, R, Gamma if cylinder_type=="portante" else 0.0) # caclolo psi nelle condizioni iniziali
+    print(f"Valore di ψ al punto ({x0},{y0}) = {psi0:.3f}")
+
+    X = np.linspace(-3, 3, 400)
+    Y = np.linspace(-3, 3, 400)
+    XX, YY = np.meshgrid(X, Y)
+
+    PSI = psi_cylinder(XX, YY, V_inf, R, Gamma if cylinder_type=="portante" else 0.0)  # calcolo psi in tutta la griglia generata
+
+    mask = np.sqrt(XX**2 + YY**2) < R
+    PSI = np.where(mask, np.nan, PSI)
+
+    plt.contour(XX, YY, PSI, levels=30, colors="blue", linewidths=1)
+
+# Profilo cilindro
+theta_cyl = np.linspace(0, 2*np.pi, 400)
+plt.plot(R*np.cos(theta_cyl), R*np.sin(theta_cyl), "k", label="Cilindro")
+
+# Punto iniziale
+plt.scatter([x0], [y0], color="red", zorder=5, label="Punto iniziale")
+
+plt.gca().set_aspect("equal", "box")
+plt.title(f"Linee di corrente attorno a cilindro {'portante' if cylinder_type=='portante' else 'non portante'}")
+plt.xlabel("x")
+plt.ylabel("y")
+plt.grid(True)
+plt.legend()
+
+# ===============================
+# CALCOLO CAMPO DI PRESSIONE
+# ===============================
+plt.subplot(1,2,2)
+
+X = np.linspace(-3, 3, 400)
+Y = np.linspace(-3, 3, 400)
+XX, YY = np.meshgrid(X, Y)
+UU, VV = velocity_field(XX, YY, V_inf, R, Gamma if cylinder_type=="portante" else 0.0)
+V2 = UU**2 + VV**2
+
+# Legge di Bernoulli:
+#   P(x,y) = (ρ/2) * (V_inf^2 - |V|^2)
+P = rho/2 * (V_inf**2 - V2)
+
+mask = np.sqrt(XX**2 + YY**2) < R
+P = np.where(mask, np.nan, P)
+
+cp = plt.contourf(XX, YY, P, levels=50, cmap="viridis")
+plt.colorbar(cp, label="Pressione")
+
+plt.plot(R*np.cos(theta_cyl), R*np.sin(theta_cyl), "k")
+plt.gca().set_aspect("equal", "box")
+plt.title("Campo di pressione attorno al cilindro")
+plt.xlabel("x")
+plt.ylabel("y")
+plt.grid(True)
+
+
+# # ===============================   GIUSTO solo che sovrascrive il primo plot
+# # DIAGRAMMA Cp SUL CILINDRO r=R
+# # ===============================
+# plt.figure(figsize=(6,5))
+
+# theta = np.linspace(0, 2*np.pi, 400)
+
+# if cylinder_type == "portante":
+#     V_theta = -2*V_inf*np.sin(theta) + Gamma/(2*np.pi*R)
+# else:
+#     V_theta = -2*V_inf*np.sin(theta)
+
+# Cp = 1 - (V_theta/V_inf)**2
+
+# plt.plot(theta*180/np.pi, Cp, "r", label=f"Cilindro {cylinder_type}")
+# plt.gca().invert_yaxis()  # convenzione aerodinamica: Cp verso il basso
+# plt.title("Distribuzione $C_p(\\theta)$ sul cilindro")
+# plt.xlabel("θ [gradi]")
+# plt.ylabel("$C_p$")
+# plt.grid(True)
+# plt.legend()
+
+# plt.tight_layout()
+# plt.savefig(f"Immagini/Cp_{cylinder_type}_metodo_{method}.png", dpi=300)
+# plt.show()
+
+
+# ===============================
+# CALCOLO FORZA AERODINAMICA (LIFT)
+# ===============================
+if cylinder_type == "portante":
+    L = rho * V_inf * Gamma   # Formula di Kutta–Joukowski
+    print(f"Forza di sollevamento (per unità di lunghezza) L = {L:.3f}")
+else:
+    L = 0.0
+    print("Cilindro non portante → L = 0")
+
+# ===============================
+# SALVATAGGIO FIGURA
+# ===============================
+plt.tight_layout()
+os.makedirs("Immagini", exist_ok=True)
+plt.savefig(f"Immagini/campo_moto_potenziale_{cylinder_type}_metodo_{method}.png", dpi=300)
+plt.show()
